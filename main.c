@@ -109,7 +109,6 @@ int sign(uint8_t *priv_key, uint8_t *M, size_t M_len, uint8_t *signature) {
 }
 
 int verify_var(uint8_t *signature, uint8_t *M, size_t M_len, uint8_t *pub_key, uint8_t variation) {
-    // Variation 1 is the default function
     const uint8_t *R_bytes = signature;
     const uint8_t *S_bytes = signature + 32;
     uint8_t k_hash[64];
@@ -117,27 +116,12 @@ int verify_var(uint8_t *signature, uint8_t *M, size_t M_len, uint8_t *pub_key, u
     uint8_t R_plus_kA[32];
     uint8_t SB[32];
 
-    // Variation 4: reject R with highest bit set
-    if (variation == 4) {
-        if (R_bytes[31] & 0x80) {
-#ifdef DEBUG
-            fprintf(stderr, "Non standard R encoding\n");
-#endif
-            return 0;
-        }
-    }
 
     // Step 1: hash R||A||M -> k
     uint8_t *concat = malloc(32 + 32 + M_len);
     memcpy(concat, R_bytes, 32);
-    // Variation 3: change order of value to hash
-    if (variation == 3) {
-        memcpy(concat + 32, M, M_len);
-        memcpy(concat + 32 + M_len, pub_key, 32);
-    } else {
-        memcpy(concat + 32, pub_key, 32);
-        memcpy(concat + 64, M, M_len);
-    }
+    memcpy(concat + 32, pub_key, 32);
+    memcpy(concat + 64, M, M_len);
     crypto_hash_sha512(k_hash, concat, 64 + M_len);
     free(concat);
 
@@ -145,72 +129,27 @@ int verify_var(uint8_t *signature, uint8_t *M, size_t M_len, uint8_t *pub_key, u
 
     // Step 2: compute [S]B
     if (crypto_scalarmult_ed25519_base_noclamp(SB, S_bytes) != 0) {
-#ifdef DEBUG
         fprintf(stderr, "[S]B failed\n");
-#endif
         return 1;
     }
 
     // Step 3: compute [k]A
     uint8_t kA[32];
-    // Variation 2: Validates against [S]B == [R]A
-    if (variation == 2) {
-        if (crypto_scalarmult_ed25519_noclamp(kA, R_bytes, pub_key) !=
-            0) { // Changed k_mod_l to R_bytes
-#ifdef DEBUG
-            fprintf(stderr, "[R]A failed\n");
-#endif
-            return 1;
-        }
-    } else {
-        if (crypto_scalarmult_ed25519_noclamp(kA, k_mod_l, pub_key) != 0) {
-#ifdef DEBUG
-            fprintf(stderr, "[k]A failed\n");
-#endif
-            return 1;
-        }
+    if (crypto_scalarmult_ed25519_noclamp(kA, k_mod_l, pub_key) != 0) {
+        fprintf(stderr, "[k]A failed\n");
+        return 1;
     }
 
     // Step 4: compute R + [k]A
-    // Variation 5: do a bitwise XOR instead of elliptic curve point addition
-    if (variation == 5) {
-        for (size_t i = 0; i < 32; i++) {
-            R_plus_kA[i] = R_bytes[i] ^ kA[i];
-        }
-    } else {
-        crypto_core_ed25519_add(R_plus_kA, R_bytes, kA);
-    }
+    crypto_core_ed25519_add(R_plus_kA, R_bytes, kA);
 
     // Step 5: check equality
-    // Variation 6: Redundant R check
-    if (variation == 5) {
-        if (sodium_memcmp(R_bytes, (uint8_t[32]){0}, 32) == 0) {
-#ifdef DEBUG
-            fprintf(stderr, "Signature R is zero point\n");
-#endif
-            return 0;
-        } else {
-            if (sodium_memcmp(SB, R_plus_kA, 32) == 0) {
-                return 1;
-            } else {
-#ifdef DEBUG
-                fprintf(stderr, "Signature mismatch\n");
-#endif
-                return 0;
-            }
-        }
+    if (sodium_memcmp(SB, R_plus_kA, 32) == 0) {
+        return 0;
     } else {
-        if (sodium_memcmp(SB, R_plus_kA, 32) == 0) {
-            return 1;
-        } else {
-#ifdef DEBUG
-            fprintf(stderr, "Signature mismatch\n");
-#endif
-            return 0;
-        }
+        fprintf(stderr, "Signature mismatch\n");
+        return 1;
     }
-
-    return 0;
 }
 
 int verify(uint8_t *signature, uint8_t *M, size_t M_len, uint8_t *pub_key) {
@@ -312,7 +251,7 @@ int main(void) {
             int result = verify_var(inputs[i].signature, inputs[i].M, inputs[i].M_len,
                                     inputs[i].pub_key, j);
             // Print 1 for PASS, 0 for FAIL, space-separated
-            printf("%d%s", result, (j == 5) ? "" : " ");
+            printf("%d%s", result ? 0 : 1, (j == 5) ? "" : " ");
         }
         printf("\n"); // Newline for next row
     }
